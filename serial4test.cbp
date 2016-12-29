@@ -11,7 +11,7 @@
 				<Option object_output="obj/Debug/" />
 				<Option type="1" />
 				<Option compiler="gcc" />
-				<Option parameters="-d /dev/rfcomm2" />
+				<Option parameters="-d /dev/ttyUSB0" />
 				<Compiler>
 					<Add option="-O2" />
 					<Add option="-std=c++11" />
@@ -52,10 +52,8 @@
 		<Unit filename="inc/Tcp.h" />
 		<Unit filename="inc/hash_func.h" />
 		<Unit filename="inc/keys.h" />
-		<Unit filename="src/MqttClient.cpp" />
 		<Unit filename="src/Serial.cpp" />
 		<Unit filename="src/Sys.cpp" />
-		<Unit filename="src/Tcp.cpp" />
 		<Unit filename="src/keys.cpp" />
 		<Unit filename="src/main.cpp" />
 		<Extensions>

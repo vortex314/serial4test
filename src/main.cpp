@@ -194,13 +194,13 @@ void loadOptions(int argc, char* argv[]) {
             if (strcmp(optarg, "DEBUG") == 0)
                 context.logLevel = LogManager::LOG_DEBUG;
             if (strcmp(optarg, "INFO") == 0)
-                context.logLevel = LogManager::INFO;
+                context.logLevel = LogManager::LOG_INFO;
             if (strcmp(optarg, "WARN") == 0)
-                context.logLevel = LogManager::WARN;
+                context.logLevel = LogManager::LOG_WARN;
             if (strcmp(optarg, "ERROR") == 0)
-                context.logLevel = LogManager::ERROR;
+                context.logLevel = LogManager::LOG_ERROR;
             if (strcmp(optarg, "FATAL") == 0)
-                context.logLevel = LogManager::FATAL;
+                context.logLevel = LogManager::LOG_FATAL;
             break;
         case '?':
             if (optopt == 'c')
@@ -257,8 +257,66 @@ void onSerialRxd(Cbor& cbor) {
     } else LOGF(" no key data ");
 }
 
+void publishInt(const char* topic,uint32_t value) {
+
+    char sValue[30];
+    sprintf(sValue,"%u",value);
+
+    eb.request(H("mqtt"),H("publish"),H("MqttCl")).addKeyValue(H("topic"),topic).addKeyValue(H("message"),sValue);
+    eb.send();
+
+}
+
 extern void logCbor(Cbor&);
 
+//_______________________________________________________________________________________________________________________________________
+//
+#define PREFIX "limero/"
+class Counter {
+    uint32_t _interval;
+    const char* _name;
+    uint64_t _start;
+    uint32_t _count;
+public:
+
+    Counter(const char* name,uint32_t interval) {
+        _interval=interval*1000;
+        _name=name;
+        _start=0;
+    }
+
+    void inc() {
+        _count++;
+        if ( Sys::_upTime- _start > _interval ) flush();
+    }
+
+    void flush() {
+        char field[30];
+        strcpy(field,PREFIX);
+
+        strcat(field,_name);
+        strcat(field,"/count");
+        publishInt(field,_count);
+
+        strcpy(field,PREFIX);
+        strcat(field,_name);
+        strcat(field,"/perSec");
+        publishInt(field,_count/(_start-Sys::millis()));
+
+        _start=Sys::millis();
+        _count=0;
+    }
+
+
+};
+Counter requests("requests",10);
+Counter responses("responses",10);
+Counter mismatchs("mismatch",10);
+Counter correct("correct",10);
+Counter timeouts("timeout",10);
+
+//_______________________________________________________________________________________________________________________________________
+//
 class Tester: public Actor {
     uint32_t _counter;
     uint32_t _correct;
@@ -277,33 +335,30 @@ public:
         eb.onReply(0,H("ping")).subscribe(this);
     }
     void onEvent(Cbor& msg) {
-#define COUNT 100
-        static uint32_t start;
         PT_BEGIN()
         ;
+
         while (true) {
-            timeout(5000);
-            PT_YIELD_UNTIL(  eb.isEvent(H("sys"),H("timeout")));
-            if ( _counter%COUNT ==0) {
-                LOGF(" request-reply %d msg/sec, correct : %d , failed : %d, timeouts : %d",(COUNT*1000)/(Sys::millis()-start),_correct,_incorrect,_timeouts);
-                start=Sys::millis();
-            }
+//           timeout(5000);
+//           PT_YIELD_UNTIL(  timeout());
+
             eb.request(H("Echo"),H("ping"),H("Tester")).addKeyValue(H("uint32_t"),_counter);
             eb.send();
+            requests.inc();
 
             timeout(5000);
             PT_YIELD_UNTIL( eb.isReply(0,H("ping")) || eb.isEvent(H("sys"),H("timeout")));
             uint32_t counter;
             if ( msg.getKeyValue(H("uint32_t"),counter) ) {
                 if ( counter==_counter ) {
-                    _correct++;
+                    correct.inc();
                 } else {
-                    _incorrect++;
+                    mismatchs.inc();
                 }
             } else {
-                _timeouts++;
+                timeouts.inc();
             }
-            _counter++;
+
         }
         PT_END()
     }
@@ -330,6 +385,7 @@ public:
 DISCONNECT : {
             eb.request(H("mqtt"),H("disconnect"),H("MqttCl"));
             eb.send();
+            requests.inc();
             timeout(2000);
 
             PT_YIELD_UNTIL(timeout());
@@ -340,21 +396,24 @@ CONNECTING : {
             while (true) {
                 eb.request(H("mqtt"),H("connect"),H("MqttCl")).addKeyValue(H("host"),"localhost").addKeyValue(H("port"),1883);
                 eb.send();
+                requests.inc();
                 timeout(3000);
 
                 PT_YIELD_UNTIL( eb.isReply(H("mqtt"),H("connect")) ||  timeout() );
 
                 if ( eb.isReply(H("mqtt"),H("connect")) && msg.getKeyValue(H("error"),_error) && _error == 0 ) {
+                    responses.inc();
                     goto CONNECTED;
                 }
             }
         }
 CONNECTED : {
             while(true) {
-            char sTime[30];
-            sprintf(sTime,"%ld",Sys::millis());
+                char sTime[30];
+                sprintf(sTime,"%ld",Sys::millis());
                 eb.request(H("mqtt"),H("publish"),H("MqttCl")).addKeyValue(H("topic"),"limero/topic").addKeyValue(H("message"),sTime);
                 eb.send();
+                requests.inc();
                 timeout(3000);
 
                 PT_YIELD_UNTIL( eb.isReply(H("mqtt"),H("publish")) || timeout() );
@@ -362,6 +421,7 @@ CONNECTED : {
 
                 if ( eb.isReply(H("mqtt"),H("publish")) && msg.getKeyValue(H("error"),_error) && _error == 0 ) {
                     LOGF(" publish succeeded ");
+                    responses.inc();
                 } else {
 
                     goto DISCONNECT;
@@ -376,6 +436,9 @@ CONNECTED : {
 
 MqttCl mqttCl;
 
+
+//_______________________________________________________________________________________________________________________________________
+//
 class SerialConnector: public Actor {
     uint32_t _error;
 public:
